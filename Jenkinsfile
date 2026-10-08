@@ -17,7 +17,7 @@ pipeline {
         stage('Checkout Code') {
             steps {
                 git branch: 'main',
-                    url: 'https://github.com/Bilaalofficial/slms.git'
+                    url: 'https://github.com/amantc-369/slms.git'
 
                 sh '''
                     echo "Repository checked out"
