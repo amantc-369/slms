@@ -1,79 +1,120 @@
 pipeline {
-  agent any
+    agent any
 
-  environment {
-    VIRTUAL_ENV = '.venv'
-    DOCKER_IMAGE = 'python-app'
-    DJANGO_SETTINGS_MODULE = 'slms.settings'
-    PYTHONPATH = "${WORKSPACE}/staffleave/slms:${WORKSPACE}/staffleave"
-    WORKDIR = 'staffleave/slms'
-    PYTEST = "${WORKSPACE}/.venv/bin/pytest"
-  }
+    environment {
+        VIRTUAL_ENV = '.venv'
+        DOCKER_IMAGE = 'slms-app'
+        CONTAINER_NAME = 'slms-app'
 
-  stages {
-    stage('Checkout Code') {
-      steps {
-        git branch: 'main', url: 'https://github.com/Bilaalofficial/slms.git'
-        sh 'echo "Checked out at $(pwd)"; ls -la'
-      }
+        DJANGO_SETTINGS_MODULE = 'slms.settings'
+        PYTHONPATH = "${WORKSPACE}/staffleave/slms:${WORKSPACE}/staffleave"
+        WORKDIR = 'staffleave/slms'
+        PYTEST = "${WORKSPACE}/.venv/bin/pytest"
     }
 
-    stage('Set Up Python and Virtual Environment') {
-      steps {
-        sh '''
-          python3 -m venv $VIRTUAL_ENV
-          ./$VIRTUAL_ENV/bin/pip install --upgrade pip
-          ./$VIRTUAL_ENV/bin/pip install -r requirements.txt
-          ./$VIRTUAL_ENV/bin/pip install pytest pytest-django
-        '''
-      }
-    }
+    stages {
 
-    stage('Sanity: manage.py exists?') {
-      steps {
-        sh 'test -f "$WORKDIR/manage.py" && echo "OK: $WORKDIR/manage.py found" || (echo "manage.py not found"; exit 1)'
-        sh 'test -x "$PYTEST" && echo "OK: pytest at $PYTEST" || (echo "pytest not found at $PYTEST"; ls -la ${WORKSPACE}; exit 1)'
-      }
-    }
+        stage('Checkout Code') {
+            steps {
+                git branch: 'main',
+                    url: 'https://github.com/Bilaalofficial/slms.git'
 
-    stage('Run Tests') {
-      steps {
-        dir("${WORKDIR}") {
-          sh '''
-            set -e
-            echo "CWD=$(pwd)"
-            echo "DJANGO_SETTINGS_MODULE=$DJANGO_SETTINGS_MODULE"
-            echo "PYTHONPATH=$PYTHONPATH"
-            find . -name settings.py -print
-            $PYTEST --ds=$DJANGO_SETTINGS_MODULE --maxfail=1 --disable-warnings -v
-          '''
+                sh '''
+                    echo "Repository checked out"
+                    echo "Workspace: $(pwd)"
+                    ls -la
+                '''
+            }
         }
-      }
+
+        stage('Set Up Python') {
+            steps {
+                sh '''
+                    python3 -m venv "$VIRTUAL_ENV"
+
+                    "$VIRTUAL_ENV/bin/pip" install --upgrade pip
+
+                    "$VIRTUAL_ENV/bin/pip" install -r requirements.txt
+
+                    "$VIRTUAL_ENV/bin/pip" install pytest pytest-django
+                '''
+            }
+        }
+
+        stage('Django Check') {
+            steps {
+                dir("${WORKDIR}") {
+                    sh '''
+                        "$WORKSPACE/.venv/bin/python" manage.py check
+                    '''
+                }
+            }
+        }
+
+        stage('Run Tests') {
+            steps {
+                dir("${WORKDIR}") {
+                    sh '''
+                        "$WORKSPACE/.venv/bin/pytest" \
+                            --ds=slms.settings \
+                            --maxfail=1 \
+                            --disable-warnings \
+                            -v
+                    '''
+                }
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                sh '''
+                    docker build \
+                        -t "$DOCKER_IMAGE:latest" \
+                        .
+                '''
+            }
+        }
+
+        stage('Deploy Application') {
+            steps {
+                sh '''
+                    echo "Stopping old SLMS container if it exists..."
+
+                    docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
+
+                    echo "Starting new SLMS container..."
+
+                    docker run -d \
+                        --restart unless-stopped \
+                        --name "$CONTAINER_NAME" \
+                        -p 80:8000 \
+                        "$DOCKER_IMAGE:latest"
+
+                    echo "Container started:"
+                    docker ps --filter "name=$CONTAINER_NAME"
+                '''
+            }
+        }
+
+        stage('Verify Deployment') {
+            steps {
+                sh '''
+                    echo "Waiting for application..."
+                    sleep 5
+
+                    curl -f http://localhost/ || exit 1
+
+                    echo ""
+                    echo "SLMS deployment successful!"
+                '''
+            }
+        }
     }
 
-    stage('Build Docker Image') {
-      when { expression { fileExists('Dockerfile') } }
-      steps {
-        sh 'docker build -t $DOCKER_IMAGE .'
-      }
+    post {
+        always {
+            echo "Pipeline finished."
+            cleanWs()
+        }
     }
-
-    stage('Deploy to Docker') {
-      when { expression { fileExists('Dockerfile') } }
-      steps {
-        sh '''
-          docker ps -q -f name=python-app | xargs -r docker stop
-          docker ps -a -q -f name=python-app | xargs -r docker rm
-          docker run -d -p 80:8000 --name python-app $DOCKER_IMAGE
-        '''
-      }
-    }
-  }
-
-  post {
-    always {
-      cleanWs()
-      echo "Pipeline finished!"
-    }
-  }
 }
